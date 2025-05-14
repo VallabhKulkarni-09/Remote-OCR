@@ -11,15 +11,33 @@ def main():
         threshold2 = 200
         blur_kernel = 5
         
-        # Create a placeholder for the image
-        image_placeholder = st.empty()
+        # Create a placeholder for the preview and processed image
+        preview_placeholder = st.empty()
+        processed_placeholder = st.empty()
         
-        # Add a capture button
-        capture_button = st.button("Capture Image")
+        # Create a video capture object
+        cap = cv2.VideoCapture(0)
         
+        if not cap.isOpened():
+            st.error("Error: Could not access the camera. Please make sure your camera is connected and not in use by another application.")
+            return
+            
+        # Show preview until capture button is pressed
+        capture_button = None
+        while not capture_button:
+            ret, frame = cap.read()
+            if ret:
+                # Convert to RGB for display
+                preview_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                preview_placeholder.image(preview_frame, use_container_width=True)
+                # Add capture button below preview
+                capture_button = st.button("Capture Image")
+            else:
+                st.error("Failed to get camera preview")
+                return
+        
+        # Now we have the frame we want to process
         if capture_button:
-            # Create a video capture object
-            cap = cv2.VideoCapture(0)
             
             if not cap.isOpened():
                 st.error("Error: Could not access the camera. Please make sure your camera is connected and not in use by another application.")
@@ -77,8 +95,10 @@ def main():
             overlay = cv2.addWeighted(frame_rgb, 1.0, edges_mask, 0.7, 0)
             overlay = cv2.addWeighted(overlay, 1.0, pattern_mask, 0.5, 0)
             
-            # Display the frame
-            image_placeholder.image(overlay, use_container_width=True)
+            # Display the processed image
+            processed_placeholder.image(overlay, use_container_width=True)
+            # Clear the preview
+            preview_placeholder.empty()
         
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
