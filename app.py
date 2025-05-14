@@ -11,9 +11,17 @@ def main():
         threshold2 = 200
         blur_kernel = 5
         
-        # Create a placeholder for the preview and processed image
+        # Create placeholders for preview and processed image
         preview_placeholder = st.empty()
         processed_placeholder = st.empty()
+        
+        # Initialize session state to store the camera state
+        if 'camera_active' not in st.session_state:
+            st.session_state.camera_active = True
+            st.session_state.frame = None
+        
+        # Add capture button at the top
+        capture_button = st.button("Capture Image")
         
         # Create a video capture object
         cap = cv2.VideoCapture(0)
@@ -22,35 +30,28 @@ def main():
             st.error("Error: Could not access the camera. Please make sure your camera is connected and not in use by another application.")
             return
             
-        # Show preview until capture button is pressed
-        capture_button = None
-        while not capture_button:
+        # Show preview and handle capture
+        while st.session_state.camera_active and not capture_button:
             ret, frame = cap.read()
             if ret:
                 # Convert to RGB for display
                 preview_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 preview_placeholder.image(preview_frame, use_container_width=True)
-                # Add capture button below preview
-                capture_button = st.button("Capture Image")
+                st.session_state.frame = frame  # Store the frame for processing
+                # Add small delay to prevent excessive CPU usage
+                cv2.waitKey(1)
             else:
                 st.error("Failed to get camera preview")
-                return
+                break
         
-        # Now we have the frame we want to process
+        # Process the captured frame when button is clicked
         if capture_button:
+            # Stop the preview
+            st.session_state.camera_active = False
+            frame = st.session_state.frame
             
-            if not cap.isOpened():
-                st.error("Error: Could not access the camera. Please make sure your camera is connected and not in use by another application.")
-                return
-                
-            # Read single frame from camera
-            ret, frame = cap.read()
-            
-            # Release the camera immediately after capture
-            cap.release()
-            
-            if not ret:
-                st.error("Failed to capture image from camera")
+            if frame is None:
+                st.error("No frame captured")
                 return
             # Convert frame to grayscale
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -78,14 +79,29 @@ def main():
             # Create pattern mask
             pattern_mask = np.zeros_like(frame_rgb)
             
-            # Draw patterns and edges
+            # Draw patterns and edges, and store button regions
+            button_regions = []
             for contour in pattern_contours:
                 area = cv2.contourArea(contour)
                 if area > 50 and area < 500:  # Filter by size to detect button-sized patterns
                     x, y, w, h = cv2.boundingRect(contour)
                     aspect_ratio = float(w)/h
                     if 0.5 <= aspect_ratio <= 2.0:  # Filter patterns by shape
+                        # Draw rectangle on pattern mask
                         cv2.rectangle(pattern_mask, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                        
+                        # Extract and enhance button region
+                        button_region = frame[y-5:y+h+5, x-5:x+w+5]  # Add padding
+                        if button_region.size > 0:  # Check if region is valid
+                            # Enhance the button region
+                            button_gray = cv2.cvtColor(button_region, cv2.COLOR_BGR2GRAY)
+                            button_enhanced = cv2.equalizeHist(button_gray)  # Enhance contrast
+                            button_denoised = cv2.fastNlMeansDenoising(button_enhanced)  # Reduce noise
+                            button_sharpened = cv2.filter2D(button_denoised, -1, np.array([[-1,-1,-1],[-1,9,-1],[-1,-1,-1]]))  # Sharpen
+                            button_regions.append({
+                                'original': cv2.cvtColor(button_region, cv2.COLOR_BGR2RGB),
+                                'enhanced': cv2.cvtColor(cv2.cvtColor(button_sharpened, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2RGB)
+                            })
             
             # Create edge mask
             edges_mask = cv2.cvtColor(thick_edges, cv2.COLOR_GRAY2RGB)
@@ -96,7 +112,23 @@ def main():
             overlay = cv2.addWeighted(overlay, 1.0, pattern_mask, 0.5, 0)
             
             # Display the processed image
+            st.subheader("Full Image with Detected Buttons")
             processed_placeholder.image(overlay, use_container_width=True)
+            
+            # Display enhanced button regions
+            if button_regions:
+                st.subheader(f"Detected Buttons ({len(button_regions)})")
+                cols = st.columns(2 * len(button_regions))  # 2 columns per button (original and enhanced)
+                for i, button in enumerate(button_regions):
+                    with cols[i*2]:
+                        st.write(f"Button {i+1} - Original")
+                        st.image(button['original'], use_column_width=True)
+                    with cols[i*2 + 1]:
+                        st.write(f"Button {i+1} - Enhanced")
+                        st.image(button['enhanced'], use_column_width=True)
+            else:
+                st.info("No buttons detected in the image")
+            
             # Clear the preview
             preview_placeholder.empty()
         
