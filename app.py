@@ -3,31 +3,37 @@ import cv2
 import numpy as np
 
 def main():
-    st.title("Real-time Remote Edge Detection")
+    st.title("Remote Image Edge Detection")
     
     try:
-        # Create a video capture object
-        cap = cv2.VideoCapture(0)
-        
-        if not cap.isOpened():
-            st.error("Error: Could not access the camera. Please make sure your camera is connected and not in use by another application.")
-            return
-        # Create a placeholder for video frames
-        frame_placeholder = st.empty()
-        
         # Set fixed parameters for edge detection
         threshold1 = 100
         threshold2 = 200
         blur_kernel = 5
-        stop_button = st.button("Stop")
         
-        while not stop_button:
-            # Read frame from camera
-            ret, frame = cap.read()
-            if not ret:
-                st.error("Failed to capture frame from camera")
-                break
+        # Create a placeholder for the image
+        image_placeholder = st.empty()
+        
+        # Add a capture button
+        capture_button = st.button("Capture Image")
+        
+        if capture_button:
+            # Create a video capture object
+            cap = cv2.VideoCapture(0)
+            
+            if not cap.isOpened():
+                st.error("Error: Could not access the camera. Please make sure your camera is connected and not in use by another application.")
+                return
                 
+            # Read single frame from camera
+            ret, frame = cap.read()
+            
+            # Release the camera immediately after capture
+            cap.release()
+            
+            if not ret:
+                st.error("Failed to capture image from camera")
+                return
             # Convert frame to grayscale
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
@@ -72,7 +78,7 @@ def main():
             overlay = cv2.addWeighted(overlay, 1.0, pattern_mask, 0.5, 0)
             
             # Display the frame
-            frame_placeholder.image(overlay, use_container_width=True)
+            image_placeholder.image(overlay, use_container_width=True)
         
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
