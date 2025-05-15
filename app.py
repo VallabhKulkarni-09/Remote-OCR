@@ -1,144 +1,114 @@
 import streamlit as st
+import ollama
+from PIL import Image
+import io
+import base64
 import cv2
 import numpy as np
 
-def main():
-    st.title("Remote Image Edge Detection")
-    
-    try:
-        # Set fixed parameters for edge detection
-        threshold1 = 100
-        threshold2 = 200
-        blur_kernel = 5
-        
-        # Create placeholders for preview and processed image
-        preview_placeholder = st.empty()
-        processed_placeholder = st.empty()
-        
-        # Initialize session state to store the camera state
-        if 'camera_active' not in st.session_state:
-            st.session_state.camera_active = True
-            st.session_state.frame = None
-        
-        # Add capture button at the top
-        capture_button = st.button("Capture Image")
-        
-        # Create a video capture object
-        cap = cv2.VideoCapture(0)
-        
-        if not cap.isOpened():
-            st.error("Error: Could not access the camera. Please make sure your camera is connected and not in use by another application.")
-            return
-            
-        # Show preview and handle capture
-        while st.session_state.camera_active and not capture_button:
-            ret, frame = cap.read()
-            if ret:
-                # Convert to RGB for display
-                preview_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                preview_placeholder.image(preview_frame, use_container_width=True)
-                st.session_state.frame = frame  # Store the frame for processing
-                # Add small delay to prevent excessive CPU usage
-                cv2.waitKey(1)
-            else:
-                st.error("Failed to get camera preview")
-                break
-        
-        # Process the captured frame when button is clicked
-        if capture_button:
-            # Stop the preview
-            st.session_state.camera_active = False
-            frame = st.session_state.frame
-            
-            if frame is None:
-                st.error("No frame captured")
-                return
-            # Convert frame to grayscale
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
-            # Apply adaptive thresholding to better detect patterns
-            binary = cv2.adaptiveThreshold(
-                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
-            )
-            
-            # Detect edges using Canny
-            edges = cv2.Canny(gray, threshold1, threshold2)
-            
-            # Make edges thicker
-            kernel = np.ones((5,5), np.uint8)
-            thick_edges = cv2.dilate(edges, kernel, iterations=2)
-            
-            # Detect patterns (circular and rectangular shapes)
-            pattern_kernel = np.ones((3,3), np.uint8)
-            patterns = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, pattern_kernel)
-            pattern_contours, _ = cv2.findContours(patterns, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Convert frame to RGB for display
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Create pattern mask
-            pattern_mask = np.zeros_like(frame_rgb)
-            
-            # Draw patterns and edges, and store button regions
-            button_regions = []
-            for contour in pattern_contours:
-                area = cv2.contourArea(contour)
-                if area > 50 and area < 500:  # Filter by size to detect button-sized patterns
-                    x, y, w, h = cv2.boundingRect(contour)
-                    aspect_ratio = float(w)/h
-                    if 0.5 <= aspect_ratio <= 2.0:  # Filter patterns by shape
-                        # Draw rectangle on pattern mask
-                        cv2.rectangle(pattern_mask, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                        
-                        # Extract and enhance button region
-                        button_region = frame[y-5:y+h+5, x-5:x+w+5]  # Add padding
-                        if button_region.size > 0:  # Check if region is valid
-                            # Enhance the button region
-                            button_gray = cv2.cvtColor(button_region, cv2.COLOR_BGR2GRAY)
-                            button_enhanced = cv2.equalizeHist(button_gray)  # Enhance contrast
-                            button_denoised = cv2.fastNlMeansDenoising(button_enhanced)  # Reduce noise
-                            button_sharpened = cv2.filter2D(button_denoised, -1, np.array([[-1,-1,-1],[-1,9,-1],[-1,-1,-1]]))  # Sharpen
-                            button_regions.append({
-                                'original': cv2.cvtColor(button_region, cv2.COLOR_BGR2RGB),
-                                'enhanced': cv2.cvtColor(cv2.cvtColor(button_sharpened, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2RGB)
-                            })
-            
-            # Create edge mask
-            edges_mask = cv2.cvtColor(thick_edges, cv2.COLOR_GRAY2RGB)
-            edges_mask[np.where((edges_mask == [255, 255, 255]).all(axis=2))] = [255, 0, 0]  # Red for edges
-            
-            # Combine original frame with patterns and edges
-            overlay = cv2.addWeighted(frame_rgb, 1.0, edges_mask, 0.7, 0)
-            overlay = cv2.addWeighted(overlay, 1.0, pattern_mask, 0.5, 0)
-            
-            # Display the processed image
-            st.subheader("Full Image with Detected Buttons")
-            processed_placeholder.image(overlay, use_container_width=True)
-            
-            # Display enhanced button regions
-            if button_regions:
-                st.subheader(f"Detected Buttons ({len(button_regions)})")
-                cols = st.columns(2 * len(button_regions))  # 2 columns per button (original and enhanced)
-                for i, button in enumerate(button_regions):
-                    with cols[i*2]:
-                        st.write(f"Button {i+1} - Original")
-                        st.image(button['original'], use_column_width=True)
-                    with cols[i*2 + 1]:
-                        st.write(f"Button {i+1} - Enhanced")
-                        st.image(button['enhanced'], use_column_width=True)
-            else:
-                st.info("No buttons detected in the image")
-            
-            # Clear the preview
-            preview_placeholder.empty()
-        
-    except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
-    
-    finally:
-        # Release resources when stopped
-        if 'cap' in locals():
-            cap.release()
+# Page configuration
+st.set_page_config(
+    page_title="Remote OCR",
+    page_icon="🔎",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-if __name__ == "__main__":
-    main()
+# Title and description in main area
+st.markdown("""
+    # <img src="data:image/png;base64,{}" width="50" style="vertical-align: -12px;"> Gemma-3 OCR
+""".format(base64.b64encode(open("./assets/gemma3.png", "rb").read()).decode()), unsafe_allow_html=True)
+
+# Add clear button to top right
+col1, col2 = st.columns([6,1])
+with col2:
+    if st.button("Clear 🗑️"):
+        if 'ocr_result' in st.session_state:
+            del st.session_state['ocr_result']
+        st.rerun()
+
+st.markdown('<p style="margin-top: -20px;">Extract structured text from images using Gemma-3 Vision!</p>', unsafe_allow_html=True)
+st.markdown("---")
+
+# Camera controls in sidebar
+with st.sidebar:
+    st.header("Camera Capture")
+    
+    # Initialize camera capture on first run
+    if 'camera' not in st.session_state:
+        st.session_state.camera = cv2.VideoCapture(0)
+        st.session_state.captured_image = None
+
+    # Display camera feed
+    FRAME_WINDOW = st.image([])
+    
+    def capture_frame():
+        ret, frame = st.session_state.camera.read()
+        if ret:
+            # Convert from BGR to RGB
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            st.session_state.captured_image = frame
+            return frame
+        return None
+
+    # Camera preview
+    if st.session_state.camera.isOpened():
+        if st.button("Capture 📸"):
+            frame = capture_frame()
+            if frame is not None:
+                st.session_state.captured_image = frame
+                st.success("Image captured!")
+            else:
+                st.error("Failed to capture image")
+        
+        # Show live preview until image is captured
+        if 'captured_image' not in st.session_state or st.session_state.captured_image is None:
+            while True:
+                frame = capture_frame()
+                if frame is not None:
+                    FRAME_WINDOW.image(frame)
+                else:
+                    break
+        else:
+            # Show captured image
+            FRAME_WINDOW.image(st.session_state.captured_image)
+            
+            # Extract text button
+            if st.button("Extract Text 🔍", type="primary"):
+                with st.spinner("Processing image..."):
+                    try:
+                        # Convert numpy array to bytes
+                        is_success, buffer = cv2.imencode(".jpg", cv2.cvtColor(st.session_state.captured_image, cv2.COLOR_RGB2BGR))
+                        io_buf = io.BytesIO(buffer)
+                        
+                        response = ollama.chat(
+                            model='gemma3:12b',
+                            messages=[{
+                                'role': 'user',
+                                'content': """Analyze the text in the provided image. Extract all readable content
+                                            and present it in a structured Markdown format that is clear, concise, 
+                                            and well-organized. Ensure proper formatting (e.g., headings, lists, or
+                                            code blocks) as necessary to represent the content effectively.""",
+                                'images': [io_buf.getvalue()]
+                            }]
+                        )
+                        st.session_state['ocr_result'] = response.message.content
+                    except Exception as e:
+                        st.error(f"Error processing image: {str(e)}")
+            
+            # Add retake button
+            if st.button("Retake 🔄"):
+                st.session_state.captured_image = None
+                st.rerun()
+    else:
+        st.error("Could not access camera. Please make sure your camera is connected and permissions are granted.")
+
+# Main content area for results
+if 'ocr_result' in st.session_state:
+    st.markdown(st.session_state['ocr_result'])
+else:
+    st.info("Upload an image and click 'Extract Text' to see the results here.")
+
+# Footer
+st.markdown("---")
+st.markdown("Made with ❤️ using Gemma-3 Vision Model | [Report an Issue](https://github.com/patchy631/ai-engineering-hub/issues)")
