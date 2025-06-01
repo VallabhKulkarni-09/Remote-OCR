@@ -356,11 +356,74 @@ class PreciseRemoteAnalyzer:
         
         return result_image
 
+def process_image(image_source, analyzer, show_intermediate=False):
+    """Process image from either file upload or camera"""
+    
+    # Convert PIL Image to numpy array if needed
+    if isinstance(image_source, Image.Image):
+        image_np = np.array(image_source)
+    else:
+        image_np = image_source
+    
+    # Convert RGB to BGR for OpenCV
+    if len(image_np.shape) == 3:
+        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+    else:
+        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_GRAY2BGR)
+    
+    # Processing steps
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # Step 1: Extract all text elements
+    status_text.text("📝 Extracting text elements...")
+    progress_bar.progress(0.3)
+    
+    text_elements = analyzer.extract_all_text_elements(image_bgr)
+    
+    if show_intermediate:
+        st.subheader("🔍 Detected Text Elements")
+        if text_elements:
+            text_info = []
+            for text, cx, cy, x1, y1, x2, y2 in text_elements:
+                text_info.append(f"'{text}' at ({cx}, {cy}) - Box: ({x1},{y1})-({x2},{y2})")
+            st.text_area("Text Elements Found:", "\n".join(text_info), height=150)
+        else:
+            st.warning("No text elements detected!")
+    
+    # Step 2: Detect actual buttons based on text positions
+    status_text.text("🎯 Identifying actual buttons...")
+    progress_bar.progress(0.6)
+    
+    if text_elements:
+        actual_buttons = analyzer.detect_actual_buttons(image_bgr, text_elements)
+        
+        # Step 3: Create labeled image
+        status_text.text("🎨 Creating final labeled image...")
+        progress_bar.progress(0.9)
+        
+        if actual_buttons:
+            result_image = analyzer.draw_precise_labels_on_image(image_bgr, actual_buttons)
+            result_image_rgb = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
+            
+            progress_bar.progress(1.0)
+            status_text.text("✅ Processing complete!")
+            
+            return result_image_rgb, actual_buttons, text_elements
+        else:
+            st.error("No actual buttons could be identified from the text elements.")
+            st.info("Try adjusting the detection settings or ensure the image has clear, readable button labels.")
+            return None, [], text_elements
+    else:
+        st.error("No text could be detected in the image.")
+        st.info("Make sure the image is clear and has readable text on the buttons. Consider installing EasyOCR for better results.")
+        return None, [], []
+
 def main():
     st.set_page_config(page_title="Precise Remote Button Labeler", layout="wide")
     
     st.title("🎯 Precise Remote Control Button Labeler")
-    st.markdown("Upload a remote control image to detect and label **actual buttons only** with their text content!")
+    st.markdown("Upload a remote control image or take a photo to detect and label **actual buttons only** with their text content!")
     
     # Show OCR status
     if EASYOCR_AVAILABLE:
@@ -382,110 +445,117 @@ def main():
     # Initialize analyzer
     analyzer = PreciseRemoteAnalyzer()
     
-    # File upload
-    uploaded_file = st.file_uploader(
-        "Choose a remote control image", 
-        type=['png', 'jpg', 'jpeg'],
-        help="Upload a clear, high-resolution image of a remote control"
+    # Image input options
+    st.subheader("📷 Image Input Options")
+    input_option = st.radio(
+        "Choose how to provide the remote control image:",
+        ["📁 Upload from File", "📸 Take Photo with Camera"],
+        horizontal=True
     )
     
-    if uploaded_file is not None:
-        # Load and display original image
-        image = Image.open(uploaded_file)
-        image_np = np.array(image)
+    image_source = None
+    
+    if input_option == "📁 Upload from File":
+        # File upload
+        uploaded_file = st.file_uploader(
+            "Choose a remote control image", 
+            type=['png', 'jpg', 'jpeg'],
+            help="Upload a clear, high-resolution image of a remote control"
+        )
         
-        # Convert RGB to BGR for OpenCV
-        if len(image_np.shape) == 3:
-            image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
-        else:
-            image_bgr = cv2.cvtColor(image_np, cv2.COLOR_GRAY2BGR)
+        if uploaded_file is not None:
+            image_source = Image.open(uploaded_file)
+            st.success("✅ Image uploaded successfully!")
+    
+    elif input_option == "📸 Take Photo with Camera":
+        # Camera input
+        st.markdown("📸 **Camera Capture**")
+        st.info("Click the button below to take a photo of your remote control using your device's camera.")
         
+        camera_image = st.camera_input(
+            "Take a photo of the remote control",
+            help="Make sure the remote is well-lit and all buttons are clearly visible"
+        )
+        
+        if camera_image is not None:
+            image_source = Image.open(camera_image)
+            st.success("✅ Photo captured successfully!")
+    
+    # Display and process image if available
+    if image_source is not None:
         # Display original image
-        st.subheader("📷 Original Remote Control")
-        st.image(image, caption="Uploaded Image", use_container_width=True)
+        st.subheader("📷 Remote Control Image")
+        st.image(image_source, caption="Source Image", use_container_width=True)
+        
+        # Add image quality tips
+        with st.expander("💡 Tips for Better Results"):
+            st.markdown("""
+            **For best button detection results:**
+            - 📏 Keep the remote straight and flat
+            - 💡 Ensure good lighting without shadows
+            - 🎯 Make sure all button text is clearly visible
+            - 📐 Try to capture the remote at a 90-degree angle
+            - 🔍 Avoid blurry or out-of-focus images
+            - 🖼️ Fill most of the frame with the remote control
+            """)
         
         # Process button
         if st.button("🎯 Detect Actual Buttons", type="primary"):
             with st.spinner("Analyzing remote control..."):
+                result = process_image(image_source, analyzer, show_intermediate)
                 
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # Step 1: Extract all text elements
-                status_text.text("📝 Extracting text elements...")
-                progress_bar.progress(0.3)
-                
-                text_elements = analyzer.extract_all_text_elements(image_bgr)
-                
-                if show_intermediate:
-                    st.subheader("🔍 Detected Text Elements")
-                    if text_elements:
-                        text_info = []
-                        for text, cx, cy, x1, y1, x2, y2 in text_elements:
-                            text_info.append(f"'{text}' at ({cx}, {cy}) - Box: ({x1},{y1})-({x2},{y2})")
-                        st.text_area("Text Elements Found:", "\n".join(text_info), height=150)
-                    else:
-                        st.warning("No text elements detected!")
-                
-                # Step 2: Detect actual buttons based on text positions
-                status_text.text("🎯 Identifying actual buttons...")
-                progress_bar.progress(0.6)
-                
-                if text_elements:
-                    actual_buttons = analyzer.detect_actual_buttons(image_bgr, text_elements)
+                if result[0] is not None:
+                    result_image_rgb, actual_buttons, text_elements = result
                     
-                    # Step 3: Create labeled image
-                    status_text.text("🎨 Creating final labeled image...")
-                    progress_bar.progress(0.9)
+                    # Display results
+                    st.subheader("🏷️ Labeled Remote Control")
+                    st.image(result_image_rgb, caption="Remote with Button Labels", use_container_width=True)
                     
-                    if actual_buttons:
-                        result_image = analyzer.draw_precise_labels_on_image(image_bgr, actual_buttons)
-                        result_image_rgb = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
-                        
-                        progress_bar.progress(1.0)
-                        status_text.text("✅ Processing complete!")
-                        
-                        # Display results
-                        st.subheader("🏷️ Labeled Remote Control")
-                        st.image(result_image_rgb, caption="Remote with Button Labels", use_container_width=True)
-                        
-                        # Summary
-                        st.subheader("📊 Results Summary")
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("Text Elements Found", len(text_elements))
-                        with col2:
-                            st.metric("Actual Buttons Detected", len(actual_buttons))
-                        with col3:
-                            success_rate = len(actual_buttons) / 44 * 100 if len(actual_buttons) <= 44 else 100
-                            st.metric("Detection Accuracy", f"{success_rate:.1f}%")
-                        
-                        # Button details
-                        st.subheader("🔘 Detected Buttons")
-                        button_details = []
-                        for i, (x1, y1, x2, y2, label) in enumerate(actual_buttons):
-                            button_details.append(f"Button {i+1}: '{label}' - Size: {x2-x1}×{y2-y1} at ({x1},{y1})")
-                        
-                        st.text_area("Button List:", "\n".join(button_details), height=200)
-                        
-                        # Download button
-                        is_success, buffer = cv2.imencode(".png", result_image)
-                        if is_success:
-                            st.download_button(
-                                label="📥 Download Labeled Image",
-                                data=buffer.tobytes(),
-                                file_name="precise_labeled_remote.png",
-                                mime="image/png"
-                            )
+                    # Summary
+                    st.subheader("📊 Results Summary")
+                    col1, col2, col3 = st.columns(3)
                     
-                    else:
-                        st.error("No actual buttons could be identified from the text elements.")
-                        st.info("Try adjusting the detection settings or ensure the image has clear, readable button labels.")
-                
-                else:
-                    st.error("No text could be detected in the image.")
-                    st.info("Make sure the image is clear and has readable text on the buttons. Consider installing EasyOCR for better results.")
+                    with col1:
+                        st.metric("Text Elements Found", len(text_elements))
+                    with col2:
+                        st.metric("Actual Buttons Detected", len(actual_buttons))
+                    with col3:
+                        success_rate = len(actual_buttons) / 44 * 100 if len(actual_buttons) <= 44 else 100
+                        st.metric("Detection Accuracy", f"{success_rate:.1f}%")
+                    
+                    # Button details
+                    st.subheader("🔘 Detected Buttons")
+                    button_details = []
+                    for i, (x1, y1, x2, y2, label) in enumerate(actual_buttons):
+                        button_details.append(f"Button {i+1}: '{label}' - Size: {x2-x1}×{y2-y1} at ({x1},{y1})")
+                    
+                    st.text_area("Button List:", "\n".join(button_details), height=200)
+                    
+                    # Download button
+                    result_image_bgr = cv2.cvtColor(result_image_rgb, cv2.COLOR_RGB2BGR)
+                    is_success, buffer = cv2.imencode(".png", result_image_bgr)
+                    if is_success:
+                        st.download_button(
+                            label="📥 Download Labeled Image",
+                            data=buffer.tobytes(),
+                            file_name="precise_labeled_remote.png",
+                            mime="image/png"
+                        )
+        
+        # Additional features
+        with st.expander("🔧 Additional Features"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔄 Rotate Image 90°"):
+                    # Rotate the image and update the display
+                    rotated = image_source.rotate(90, expand=True)
+                    st.image(rotated, caption="Rotated Image", use_container_width=True)
+                    # You could store this rotated image in session state for processing
+            
+            with col2:
+                if st.button("📐 Crop Image"):
+                    st.info("Use an image editor to crop the image before uploading for better results.")
 
 if __name__ == "__main__":
     main()
